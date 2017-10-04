@@ -7,6 +7,7 @@
 //  - Command Line Program
 //
 // Primary Author: Jonathan Bronson (bronson@sci.utah.edu)
+// Secondary Author: Petar Petrov (pip010@gmail.com)
 //
 /* -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- */
 /* -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- */
@@ -42,14 +43,15 @@
 //
 /* -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=- */
 #include <Cleaver/Cleaver.h>
+#include <Cleaver/CleaverMesher.h>
 #include <Cleaver/InverseField.h>
 #include <Cleaver/SizingFieldCreator.h>
-#include <NRRDTools.h>
+#include <nrrd2cleaver/nrrd2cleaver.h>
+#include <Cleaver/Timer.h>
 
 #include <boost/program_options.hpp>
 
 // STL Includes
-#include <memory>
 #include <exception>
 #include <iostream>
 #include <vector>
@@ -58,16 +60,12 @@
 #include <string>
 #include <ctime>
 
-const std::string kDefaultOutputName   = "sizingfield";
+const std::string kDefaultOutputName   = "bgmesh";
 
-const double kDefaultScale = 2.0;
-const double kDefaultLipschitz = 0.2;
-const double kDefaultMultiplier = 1.0;
-const int    kDefaultPadding = 0;
+const double kDefaultAlpha = 0.4;
+const double kDefaultAlphaLong = 0.357;
+const double kDefaultAlphaShort = 0.203;
 
-const std::string kDefaultScaleString = "2.0";
-const std::string kDefaultLipschitzString = "0.2";
-const std::string kDefaultMultiplierString = "1.0";
 
 namespace po = boost::program_options;
 
@@ -75,12 +73,15 @@ namespace po = boost::program_options;
 int main(int argc,	char* argv[])
 {
     bool verbose = false;
+    bool have_sizing_field = false;
     std::vector<std::string> material_fields;
     std::string output_path = kDefaultOutputName;
-    double scale      = kDefaultScale;
-    double lipschitz  = kDefaultLipschitz;
-    double multiplier = kDefaultMultiplier;
-    int    padding    = kDefaultPadding;
+    double alpha = kDefaultAlpha;
+    double alpha_long = kDefaultAlphaLong;
+    double alpha_short = kDefaultAlphaShort;
+    std::string sizing_field;
+    enum cleaver::MeshType mesh_mode = cleaver::Structured;
+    double background_time = 0;
 
     //-------------------------------
     //  Parse Command Line Params
@@ -92,11 +93,12 @@ int main(int argc,	char* argv[])
                 ("verbose,v", "enable verbose output")
                 ("version,V", "display version information")
                 ("material_fields,i", po::value<std::vector<std::string> >()->multitoken(), "material field paths")
-                ("grading,g", po::value<double>(&lipschitz)->default_value(kDefaultLipschitz, kDefaultLipschitzString), "sizing field grading")
-                ("multiplier,x", po::value<double>(&multiplier)->default_value(kDefaultMultiplier), "sizing field multiplier")
-                ("scale,c", po::value<double>(&scale)->default_value(kDefaultScale), "sizing field scale")
-                ("output", po::value<std::string>()->default_value(kDefaultOutputName, "sizingfield"), "output path")
-                ("padding,p", po::value<int>()->default_value(kDefaultPadding), "padding")
+                ("alpha,a", po::value<double>(), "initial alpha value")
+                ("alpha_short,s", po::value<double>(), "alpha short value for regular mesh_mode")
+                ("alpha_long,l", po::value<double>(), "alpha long value for regular mesh_mode")
+                ("mesh_mode,m", po::value<std::string>(), "background mesh mode (structured [default], regular)")
+                ("sizing_field,z", po::value<std::string>(), "sizing field path")
+                ("output", po::value<std::string>()->default_value(kDefaultOutputName, "bgmesh"), "output path")
         ;
 
         boost::program_options::variables_map variables_map;
@@ -119,6 +121,32 @@ int main(int argc,	char* argv[])
             verbose = true;
         }
 
+        //alphas
+        if (variables_map.count("alpha")) {
+          alpha = variables_map["alpha"].as<double>();
+        }
+        if (variables_map.count("alpha_short")) {
+          alpha_short = variables_map["alpha_short"].as<double>();
+        }
+        if (variables_map.count("alpha_long")) {
+          alpha_long = variables_map["alpha_long"].as<double>();
+        }
+
+        // parse the background mesh mode
+        if (variables_map.count("mesh_mode")) {
+          std::string mesh_mode_string = variables_map["mesh_mode"].as<std::string>();
+          if(mesh_mode_string.compare("regular") == 0) {
+            mesh_mode = cleaver::Regular;
+          }
+          else if(mesh_mode_string.compare("structured") == 0) {
+            mesh_mode = cleaver::Structured;
+          } else {
+            std::cerr << "Error: invalid background mesh mode: " << mesh_mode_string << std::endl;
+            std::cerr << "Valid Modes: [regular] [structured] " << std::endl;
+            return 6;
+          }
+        }
+
         // parse the material field input file names
         if (variables_map.count("material_fields")) {
             material_fields = variables_map["material_fields"].as<std::vector<std::string> >();
@@ -127,6 +155,15 @@ int main(int argc,	char* argv[])
         else{
             std::cout << "Error: At least one material field file must be specified." << std::endl;
             return 0;
+        }
+
+        //-----------------------------------------
+        // parse the sizing field input file name
+        // and NOT check for conflicting parameters
+        //----------------------------------------
+        if (variables_map.count("sizing_field")) {
+          have_sizing_field = true;
+          sizing_field = variables_map["sizing_field"].as<std::string>();
         }
 
         // set output path
@@ -151,7 +188,7 @@ int main(int argc,	char* argv[])
         std::cout << " - " << material_fields[i] << std::endl;
     }
 
-    std::vector<cleaver::AbstractScalarField*> fields = NRRDTools::loadNRRDFiles(material_fields);
+    std::vector<cleaver::AbstractScalarField*> fields = loadNRRDFiles(material_fields, verbose);
     if(fields.empty()){
         std::cerr << "Failed to load image data. Terminating." << std::endl;
         return 0;
@@ -160,28 +197,72 @@ int main(int argc,	char* argv[])
         fields.push_back(new cleaver::InverseScalarField(fields[0]));
     }
 
-    std::unique_ptr<cleaver::Volume> volume = std::make_unique<cleaver::Volume>(fields);// new cleaver::Volume(fields);
+    cleaver::Volume *volume = new cleaver::Volume(fields);
+
+    cleaver::CleaverMesher mesher(volume);
+    mesher.setAlphaInit(alpha);
 
     //------------------------------------------------------------
-    // Construct Sizing Field
+    // Load Sizing Field
     //------------------------------------------------------------
-    cleaver::FloatField *sizingField =
-            cleaver::SizingFieldCreator::createSizingFieldFromVolume(
-                volume.get(),
-                (float)(1.0/lipschitz),
-                (float)scale,
-                (float)multiplier,
-                (int)padding,
-                verbose);
+    cleaver::AbstractScalarField *sizingField = NULL;
+    if (have_sizing_field)
+    {
+      std::cout << "Loading sizing field: " << sizing_field << std::endl;
+      sizingField = loadNRRDFile(sizing_field, verbose);
+    }
+    else
+    {
+      std::cerr << "Sizing Field file required !" << '\n';
+      return 2;
+    }
 
     //------------------------------------------------------------
-    // Write Field to File
+    // Set Sizing Field on Volume
     //------------------------------------------------------------
-    std::cout << " Writing sizing field to file: " << output_path << ".nrrd" << std::endl;  // todo(jrb) strip path
-    NRRDTools::saveNRRDFile(sizingField, output_path);
+    volume->setSizingField(sizingField);
 
 
-    // done
+    //-----------------------------------------------------------
+    // Construct Background Mesh
+    //-----------------------------------------------------------
+    cleaver::Timer background_timer;
+    background_timer.start();
+
+    cleaver::TetMesh *bgMesh = NULL;
+
+    if(verbose)
+      std::cout << "Creating Octree Mesh..." << std::endl;
+
+    switch(mesh_mode)
+    {
+      case cleaver::Regular:
+        mesher.setAlphas(alpha_long,alpha_short);
+        mesher.setRegular(true);
+        bgMesh = mesher.createBackgroundMesh(verbose);
+        break;
+
+      default:
+      case cleaver::Structured:
+        mesher.setRegular(false);
+        bgMesh = mesher.createBackgroundMesh(verbose);
+        break;
+    }
+
+    background_timer.stop();
+    background_time = background_timer.time();
+    mesher.setBackgroundTime(background_time);
+
+    //-----------------------------------------------------------
+    // Write Background Mesh
+    //-----------------------------------------------------------
+    if (bgMesh ) {
+      bgMesh->writeNodeEle(output_path, false, false, false);
+    }
+
+    //-----------------------------------------------------------
+    // THE END
+    //-----------------------------------------------------------
     std::cout << " Done." << std::endl;
     return 0;
 }

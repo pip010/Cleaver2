@@ -141,7 +141,7 @@ class Triple
 class FeatureOctant
 {
     public:
-	Triple a, b; 
+	Triple a, b;
 	FeatureOctant *child[8];
 	double  min;
 	void assign(int i, int j, int c, int d, int e, int f)
@@ -158,17 +158,19 @@ class FeatureOctant
 
 class SizingFieldCreator
 {
+
     public:    
     SizingFieldCreator(const Volume*, float speed = 1.0f,
       float sampleFactor = 2.0f, float sizingFactor = 1.0f, 
       int padding = 0, bool adaptiveSurface=true, bool verbose=false);
+
     ~SizingFieldCreator();
 
     double valueAt(double x, double y, double z) const;
     double operator()(double x, double y, double z) const
     {
         return valueAt(x,y,z);
-    }    
+    }
     double valueAt(const vec3 &x) const
     {
         return valueAt(x.x,x.y,x.z);
@@ -182,6 +184,7 @@ class SizingFieldCreator
       float speed = 1.0f, float sampleFactor = 2.0f, float sizingFactor = 1.0f,
       int m_padding = 0, bool featureSize=true, bool verbose=false);
     
+
     private:
     bool   m_verbose;
     double m_speed;
@@ -190,7 +193,7 @@ class SizingFieldCreator
 
     double compute_size(VoxelMesh&, VoxelMesh&, FeatureOctant*, int);
     double search_size(VoxelMesh&, const Triple&, const Triple&, FeatureOctant*);
-	bool exists(QueueIndex&, VoxelMesh&);
+	  bool exists(QueueIndex&, VoxelMesh&);
     void proceed(VoxelMesh&, std::vector<Triple>&, double, double);
     Triple make_triple(int, int, int);
     QueueIndex make_index(int i, int j, int k);

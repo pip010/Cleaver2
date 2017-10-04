@@ -7,8 +7,8 @@
 # Contributing Authors:  Joshua   A. Levine  (levine@sci.utah.edu)
 #                        Mark     B. Kim     (mkim@sci.utah.edu)
 #                        Shankar     Sastry  (sastry@sci.utah.edu)
-#                        Brig        Bagley  (brig@sci.utah.edu)
-#
+#                        Brig        Bagley  (brig@sci.utah.edu)		
+#						 Petar		 Petrov  (pip010@gmail.com)
 #-----------------------------------------------------------------------------
 #-----------------------------------------------------------------------------
 #
@@ -56,7 +56,7 @@ ENDIF()
 ADD_SUBDIRECTORY(lib/cleaver)
 
 # TODO(jonbronson): Change to not use ITK by default once teem is added.
-OPTION(USE_ITK "Use ITK instead of Teem for nrrd files." ON)
+OPTION(USE_ITK "Use ITK instead of Teem for nrrd files." OFF)
 IF(NOT USE_ITK)
   ADD_SUBDIRECTORY(lib/teem)
 ENDIF()
@@ -87,21 +87,23 @@ IF(BUILD_CLI OR BUILD_GUI)
   IF(BUILD_GUI)
     ADD_SUBDIRECTORY(gui)
   ENDIF()
+  
+  	########################################################################
+	# All of the testing and test framework options
+	INCLUDE(CTest)
+	if (BUILD_TESTING)
+	  ENABLE_TESTING()
+	  # Use gcov for code coverage (useful for seeing test completeness)
+	  OPTION(USE_GCOV "Enable code coverage for GNUCXX Platforms" OFF)
+	  if (USE_GCOV)
+	    if(CMAKE_COMPILER_IS_GNUCXX)
+	      INCLUDE(${PROJECT_SOURCE_DIR}/CodeCoverage.cmake)
+	      SET(CMAKE_CXX_FLAGS "-g -O0 -fprofile-arcs -ftest-coverage")
+	      SET(CMAKE_C_FLAGS "-g -O0 -fprofile-arcs -ftest-coverage")
+	    endif()
+	  endif()
+	  ADD_SUBDIRECTORY(lib/gtest)
+	  ADD_SUBDIRECTORY(test)
+	endif()
 
-ENDIF()
-
-# All of the testing and test framework options
-INCLUDE(CTest)
-IF(BUILD_TESTING)
-  ENABLE_TESTING()
-  # Use gcov for code coverage (useful for seeing test completeness)
-  OPTION(USE_GCOV "Enable code coverage for GNUCXX Platforms" OFF)
-  IF(USE_GCOV)
-    IF(CMAKE_COMPILER_IS_GNUCXX)
-      INCLUDE(${PROJECT_SOURCE_DIR}/CodeCoverage.cmake)
-      SET(CMAKE_CXX_FLAGS "-g -O0 -fprofile-arcs -ftest-coverage")
-      SET(CMAKE_C_FLAGS "-g -O0 -fprofile-arcs -ftest-coverage")
-    ENDIF()
-  ENDIF()
-  ADD_SUBDIRECTORY(test)
 ENDIF()
